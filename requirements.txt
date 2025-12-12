@@ -1,7 +1,11 @@
-opencv
-streamlit
-collections
-numpy
-pyautogui
-time
-ultralytics
+streamlit>=1.24.0
+ultralytics>=8.0.0
+torch>=2.0.0           # pick CPU or CUDA build using official torch install command below
+opencv-python>=4.7.0
+numpy>=1.23.0
+pillow>=9.0.0
+pyautogui>=0.9.55
+pyinstaller>=5.1       # optional, if you bundle a local exe
+streamlit-webrtc>=0.49.0  # optional: for browser-based webcam streaming
+aiohttp>=3.8.0         # required by streamlit-webrtc
+pyee>=9.0.0            # sometimes needed by webrtc
