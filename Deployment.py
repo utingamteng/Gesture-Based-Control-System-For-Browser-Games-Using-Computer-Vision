@@ -1,4 +1,3 @@
-# streamlit_gesture_tuner_holdmode.py
 import streamlit as st
 import cv2
 import time
@@ -7,206 +6,219 @@ import numpy as np
 import pyautogui
 from ultralytics import YOLO
 
-# ---------- config / defaults ----------
-MODEL_PATH = "best.pt"
-CAM_INDEX = 0
-DEFAULTS = {
-    "FPS_PROCESS": 15,
-    "CONF_THRESH": 0.50,
-    "CONFIRM_COUNT": 3,
-    "COOLDOWN_SECS": 0.35,
-    "KEY_PRESS_DURATION": 0.06
+ModelPath = r"runs\detect\\train2\weights\best.pt"
+CameraIndex = 0
+
+DefaultConfiguration = {
+    "FpsProcessing": 15,
+    "ConfidenceThreshold": 0.50,
+    "MinimumFrameConfirm": 3,
+    "ActionCooldown": 0.35,
+    "PressDuration": 0.06
 }
-CLASS_TO_KEY = {
+
+ClassToKeyConversion = {
     "High Five": "up",
     "Two": "down",
     "Thumb": "left",
     "Pinky": "right",
     "Flat": "space"
 }
+
 pyautogui.FAILSAFE = False
+Model = YOLO(ModelPath)
 
-# ---------- load model once ----------
-@st.cache_resource
-def load_model(path):
-    return YOLO(path)
+st.title(":rainbow[Hand Gesture Based Game Controller]")
+st.write("yay")
 
-try:
-    model = load_model(MODEL_PATH)
-except Exception as e:
-    st.error(f"Failed to load model: {e}")
-    st.stop()
+st.header("Settings!")
 
-# ---------- UI ----------
-st.title("Hand Gesture Controller — Tuner (Hold mode supported)")
-st.markdown("Toggle **Hold mode** if the target game requires you to hold a key to keep moving. When Hold mode is on, keys are held down while the gesture is present.")
+with st.expander("Open Settings"):
+    FpsProcessing = st.slider(
+        "FPS (processing)", 
+        5, 30, 
+        DefaultConfiguration["FpsProcessing"], 
+        step=1,
+        help="Higher FPS helps the system respond faster and prevent lag, but it costs GPU/CPU power"
+    )
 
-col1, col2 = st.columns(2)
+    ConfidenceThreshold = st.slider(
+        "Confidence Threshold", 
+        0.01, 0.99, 
+        float(DefaultConfiguration["ConfidenceThreshold"]), 
+        step=0.01,
+        help="Higher confidence helps lower the system's false gesture reading"
+    )
 
-with col1:
-    fps_process = st.slider("FPS (processing)", 5, 30, DEFAULTS["FPS_PROCESS"], step=1,
-                            help="How many frames per second to process (lower -> less CPU, more lag).")
-    conf_thresh = st.slider("Confidence threshold", 0.1, 0.99, float(DEFAULTS["CONF_THRESH"]), step=0.01,
-                            help="Ignore detections below this confidence.")
-    confirm_count = st.slider("Confirm count (frames)", 1, 7, DEFAULTS["CONFIRM_COUNT"],
-                              help="How many recent frames must agree before action fires.")
-with col2:
-    cooldown_secs = st.slider("Cooldown (s)", 0.0, 1.5, float(DEFAULTS["COOLDOWN_SECS"]), step=0.01,
-                              help="Minimum seconds between actions to avoid spam. Ignored in Hold mode.")
-    key_press_duration = st.slider("Key press duration (s)", 0.01, 0.3, float(DEFAULTS["KEY_PRESS_DURATION"]), step=0.01,
-                                   help="How long to hold the key down for tap mode.")
-    show_preview = st.checkbox("Show camera preview", value=True)
+    MinimumFrameConfirm = st.slider(
+        "Minimum Frame Count", 
+        1, 10, 
+        DefaultConfiguration["MinimumFrameConfirm"],
+        help="Higher Minimum Frame Count helps prevent accidental action, but also make the system respond slower"
+    )
 
-hold_mode = st.checkbox("Hold mode (for continuous movement)", value=False,
-                        help="If on: keyDown when gesture confirmed, keyUp when gesture stops. If off: short tap behavior.")
-# Activate checkbox uses a key so we can detect real-time toggle in the loop via session_state
-st.checkbox("Activate Hand Gesture Controller", key="activate", value=False)
+    ActionCooldown = st.slider(
+        "Action Cooldown", 
+        0.0, 1.5, 
+        float(DefaultConfiguration["ActionCooldown"]), 
+        step=0.01,
+        help="Higher cooldown helps prevent input spamming or constant hold"
+    )
 
-# placeholders
-frame_ph = st.empty()
-status_ph = st.empty()
-recent_ph = st.empty()
+    PressDuration = st.slider(
+        "Key Hold Duration", 
+        0.01, 0.3, 
+        float(DefaultConfiguration["PressDuration"]), 
+        step=0.01,
+        help="Some games require the key to be held briefly or the input won't register"
+    )
+    
+    PreviewMode = st.checkbox("Show camera preview", value=True)
 
-# ---------- runtime variables ----------
-# We'll recreate recent_labels inside the loop whenever confirm_count changes; so start with something reasonable
-recent_labels = collections.deque(maxlen=max(1, confirm_count))
-last_action_time = 0.0
-current_held_key = None  # For hold mode: which key is currently held down
 
-def tap_key(key, duration):
+st.header("Mode")
+
+with st.expander("Open Modes"):
+
+    HoldMode = st.checkbox("Hold Mode", value=False,
+                            help="Activate \"Hold Mode\" for games that requires certain keys to be held")
+
+st.header("Activate Controller!")
+
+with st.expander("Toggle Controller"):
+    st.checkbox("Activate!", key="activate", value=False)
+
+Frame = st.empty()
+Status = st.empty()
+Recent = st.empty()
+
+RecentLabels = collections.deque(maxlen=max(1, MinimumFrameConfirm))
+LastActionTime = 0.0
+CurrentlyHeldKey = None
+
+def PressKey(key, duration):
     try:
         pyautogui.keyDown(key)
         time.sleep(duration)
         pyautogui.keyUp(key)
     except Exception as e:
-        st.write("pyautogui error (tap):", e)
+        st.write("Press Error Detected!", e)
 
-def hold_key_down(key):
+def HoldKey(key):
     try:
         pyautogui.keyDown(key)
     except Exception as e:
-        st.write("pyautogui error (keydown):", e)
+        st.write("Hold Error Detected!", e)
 
-def release_key(key):
+def ReleaseKey(key):
     try:
         pyautogui.keyUp(key)
     except Exception as e:
-        st.write("pyautogui error (keyup):", e)
+        st.write("Release Error Deteected!", e)
 
-# ---------- main loop ----------
-# Use activate from session_state to allow real-time toggling
+
 if st.session_state.get("activate", False):
-    cap = cv2.VideoCapture(CAM_INDEX)
-    if not cap.isOpened():
-        st.error("Cannot open webcam. Check CAM_INDEX or permissions.")
-    else:
-        st.info("Model running. Make gestures in view of the camera. Make sure the game window has focus to receive keys.")
-        try:
-            prev_time = 0.0
-            # main loop
-            while st.session_state.get("activate", False):
-                # Update recent_labels if confirm_count changed
-                if recent_labels.maxlen != max(1, confirm_count):
-                    recent_labels = collections.deque(maxlen=max(1, confirm_count))
+    cap = cv2.VideoCapture(CameraIndex)
 
-                # throttle to fps_process
-                now_time = time.time()
-                if now_time - prev_time < 1.0 / max(1, fps_process):
-                    time.sleep(max(0.001, 1.0 / fps_process - (now_time - prev_time)))
-                prev_time = time.time()
+    if not cap.isOpened():
+        st.error("Unable to activate camera!")
+    
+    else:
+        st.info("Try making gestures inside the window!")
+        try:
+            PastTime = 0.0
+            while st.session_state.get("activate", False):
+
+                if RecentLabels.maxlen != max(1, MinimumFrameConfirm):
+                    RecentLabels = collections.deque(maxlen=max(1, MinimumFrameConfirm))
+
+                # throttle to FpsProcessing
+                PresentTime = time.time()
+                if PresentTime - PastTime < 1.0 / max(1, FpsProcessing):
+                    time.sleep(max(0.001, 1.0 / FpsProcessing - (PresentTime - PastTime)))
+                PastTime = time.time()
 
                 ret, frame = cap.read()
                 if not ret:
                     st.warning("Frame capture failed.")
                     break
 
-                frame = cv2.flip(frame, 1)  # mirror
+                frame = cv2.flip(frame, 1) 
 
-                # inference
-                results = model(frame, imgsz=160)
-                r = results[0]
+                Output = Model(frame, imgsz=160)
+                r = Output[0]
 
-                chosen_label = None
+                ChosenLabel = None
                 if r.boxes is not None and len(r.boxes) > 0:
-                    confs = r.boxes.conf.cpu().numpy().flatten()
-                    cls_ids = r.boxes.cls.cpu().numpy().flatten().astype(int)
-                    best_idx = int(np.argmax(confs))
-                    best_conf = float(confs[best_idx])
-                    best_cls = int(cls_ids[best_idx])
-                    if best_conf >= conf_thresh:
-                        cls_name = model.names.get(best_cls, str(best_cls))
-                        chosen_label = cls_name
-                        # draw rectangle
-                        xyxy = r.boxes.xyxy.cpu().numpy()[best_idx]
+                    Confidence = r.boxes.conf.cpu().numpy().flatten()
+                    ClassID = r.boxes.cls.cpu().numpy().flatten().astype(int)
+                    BestIndex = int(np.argmax(Confidence))
+                    BestConfidence = float(Confidence[BestIndex])
+                    BestClass = int(ClassID[BestIndex])
+                    if BestConfidence >= ConfidenceThreshold:
+                        ClassName = Model.names.get(BestClass, str(BestClass))
+                        ChosenLabel = ClassName
+
+                        xyxy = r.boxes.xyxy.cpu().numpy()[BestIndex]
                         x1, y1, x2, y2 = xyxy.astype(int)
-                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0,255,0), 2)
-                        cv2.putText(frame, f"{cls_name} {best_conf:.2f}", (x1, y1-10),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,0), 2)
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                        cv2.putText(frame, f"{ClassName} {BestConfidence:.2f}", (x1, y1-10),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 0), 2)
 
-                recent_labels.append(chosen_label if chosen_label else "none")
-                most_common = collections.Counter(recent_labels).most_common(1)[0][0]
+                RecentLabels.append(ChosenLabel if ChosenLabel else "none")
+                MostCommon = collections.Counter(RecentLabels).most_common(1)[0][0]
 
-                tnow = time.time()
-                if hold_mode:
-                    # --- HOLD MODE logic ---
-                    # If a valid gesture is present and confirmed:
-                    if most_common != "none" and recent_labels.count(most_common) >= max(1, confirm_count):
-                        key = CLASS_TO_KEY.get(most_common, None)
-                        # If it's a different key than currently held, switch
-                        if key and key != current_held_key:
-                            # release previous if any
-                            if current_held_key is not None:
-                                release_key(current_held_key)
-                                status_ph.info(f"Released '{current_held_key}'")
-                            # hold new
-                            hold_key_down(key)
-                            current_held_key = key
-                            status_ph.success(f"[{time.strftime('%H:%M:%S')}] Holding '{key}' for gesture '{most_common}'")
-                        # else: same key already held -> do nothing
+                TimeRightNow = time.time()
+
+                if HoldMode:
+                    if MostCommon != "none" and RecentLabels.count(MostCommon) >= max(1, MinimumFrameConfirm):
+                        key = ClassToKeyConversion.get(MostCommon, None)
+                        if key and key != CurrentlyHeldKey:
+                            if CurrentlyHeldKey is not None:
+                                ReleaseKey(CurrentlyHeldKey)
+                                Status.info(f"Released '{CurrentlyHeldKey}'")
+                            HoldKey(key)
+                            CurrentlyHeldKey = key
+                            Status.success(f"[{time.strftime('%H:%M:%S')}] Holding '{key}' for gesture '{MostCommon}'")
                     else:
-                        # no confirmed gesture -> release held key if exists
-                        if current_held_key is not None:
-                            release_key(current_held_key)
-                            status_ph.info(f"Released '{current_held_key}' (no gesture)")
-                            current_held_key = None
+                        if CurrentlyHeldKey is not None:
+                            ReleaseKey(CurrentlyHeldKey)
+                            Status.info(f"Released '{CurrentlyHeldKey}' (no gesture)")
+                            CurrentlyHeldKey = None
+
                 else:
-                    # --- TAP MODE logic (original behavior) ---
-                    if most_common != "none" and recent_labels.count(most_common) >= max(1, confirm_count):
-                        if tnow - last_action_time >= cooldown_secs:
-                            key = CLASS_TO_KEY.get(most_common, None)
+                    if MostCommon != "none" and RecentLabels.count(MostCommon) >= max(1, MinimumFrameConfirm):
+                        if TimeRightNow - LastActionTime >= ActionCooldown:
+                            key = ClassToKeyConversion.get(MostCommon, None)
                             if key:
-                                status_ph.info(f"[{time.strftime('%H:%M:%S')}] Gesture '{most_common}' -> tap '{key}'")
-                                tap_key(key, key_press_duration)
-                                last_action_time = tnow
-                                recent_labels.clear()
+                                Status.info(f"[{time.strftime('%H:%M:%S')}] Gesture '{MostCommon}' -> tap '{key}'")
+                                PressKey(key, PressDuration)
+                                LastActionTime = TimeRightNow
+                                RecentLabels.clear()
                             else:
-                                status_ph.warning(f"Detected '{most_common}' but no key mapped.")
+                                Status.warning(f"Detected '{MostCommon}' but no key mapped.")
 
-                # show preview and UI hints
-                if show_preview:
-                    cv2.putText(frame, f"Most: {most_common}", (10, 30),
+                if PreviewMode:
+                    cv2.putText(frame, f"Most: {MostCommon}", (10, 30),
                                 cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,255,0), 2)
-                    frame_ph.image(frame, channels="BGR")
+                    Frame.image(frame, channels="BGR")
 
-                # show recent label bar (simple)
-                counts = collections.Counter(recent_labels)
-                recent_ph.markdown("**Recent votes:** " + " | ".join(f"{k}:{v}" for k,v in counts.items()))
+                counts = collections.Counter(RecentLabels)
+                Recent.markdown("**Recent votes:** " + " | ".join(f"{k}:{v}" for k,v in counts.items()))
 
-            # end while (user toggled off)
         except Exception as e:
             st.error(f"Stopped due to error: {e}")
         finally:
-            # ensure any held key is released
-            if current_held_key is not None:
+            if CurrentlyHeldKey is not None:
                 try:
-                    release_key(current_held_key)
+                    ReleaseKey(CurrentlyHeldKey)
                 except Exception:
                     pass
-                current_held_key = None
+                CurrentlyHeldKey = None
             cap.release()
-            frame_ph.empty()
-            status_ph.empty()
-            recent_ph.empty()
+            Frame.empty()
+            Status.empty()
+            Recent.empty()
             st.info("Stopped. Camera released and keys (if any) released.")
 else:
-    st.info("Controller is inactive. Check 'Activate Hand Gesture Controller' to start.")
+    st.info("Controller is inactive. Check 'Activate!' to start.")
