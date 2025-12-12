@@ -1,0 +1,7 @@
+streamlit>=1.24.0
+ultralytics>=8.0.0
+torch>=2.0.0    # install CPU or CUDA wheel per instructions
+opencv-python>=4.7.0
+numpy>=1.23.0
+pillow>=9.0.0
+pyautogui==0.9.54
