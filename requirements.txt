@@ -1,7 +1,0 @@
-streamlit>=1.24.0
-pyautogui==0.9.54
-opencv-python-headless>=4.7.0
-numpy>=1.23.0
-pillow>=9.0.0
-ultralytics==8.0.196
-torch==2.1.0   # the last version with 3.11 wheels on Linux
