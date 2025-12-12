@@ -1,2 +1,7 @@
 opencv
-os
+streamlit
+collections
+numpy
+pyautogui
+time
+ultralytics
