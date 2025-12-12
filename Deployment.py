@@ -8,7 +8,7 @@ import pyautogui
 from ultralytics import YOLO
 
 # ---------- config / defaults ----------
-MODEL_PATH = r"runs\detect\\train2\weights\best.pt"
+MODEL_PATH = "best.pt"
 CAM_INDEX = 0
 DEFAULTS = {
     "FPS_PROCESS": 15,
